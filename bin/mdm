@@ -1,0 +1,77 @@
+#! /usr/bin/python3
+import urwid, pwd, grp, crypt, getpass, spwd, logging, subprocess, shutil, distutils, os, sys
+TTY = str(os.ttyname(sys.stdout.fileno())).split('/')[2].replace('tty','')
+DESKTOPS = os.listdir('/usr/share/xsessions')
+dlist = []
+
+def log(level,msg):
+    print("["+level+"] "+msg)
+
+for desktop in DESKTOPS:
+    dname = str(desktop).replace('.desktop', '')
+    log("Action","adding desktop "+dname+" to list.")
+    dlist.insert(-1, dname)
+
+users = []
+for p in pwd.getpwall():
+    if p[2] > 999 and p[6] != "/usr/sbin/nologin" and p[6] != "/sbin/nologin":
+        log("Action","adding user "+p[0]+" to list.")
+        users.insert(-1, p[0])
+
+def check_pass(username):
+   password = spwd.getspnam(username).sp_pwdp
+   if password:
+      clr_text = getpass.getpass()
+      return crypt.crypt(clr_text, password) == password
+   else:
+      return 1
+
+def menu(title, choices, signal):
+    body = [urwid.Text(title), urwid.Divider()]
+    for c in users:
+        button = urwid.Button(c)
+        urwid.connect_signal(button, 'click', signal, c)
+        body.append(urwid.AttrMap(button, None, focus_map='reversed'))
+    return urwid.ListBox(urwid.SimpleFocusListWalker(body))
+
+def update_passwd_cache(widget, newtext):
+    global passwd_c
+    passwd_c = newtext
+
+def wm_process(button, choice):
+    FILE = open('/usr/share/xsessions/' + DESKTOPS[SELECTEDINDEX], "rb")
+    for line in FILE:
+        try:
+            if line.decode('utf8').startswith("Exec="):
+                EXEC = ' '.join(line.decode('utf8').split('=')[1:]).rstrip()
+        except:
+            # Ignore the line
+            continue
+        # Start the desktop session
+        os.system('sx ' + EXEC + " -- :1 vt" + TTY)
+        main.original_widget = urwid.Filler(menu(u'Choose users', users, item_chosen))
+
+def password_process(button, choice):
+    global passwd_c
+    if check_pass(choice):
+        menu(u"Choose Desktop Envioment", dlist, wm_process)
+
+def item_chosen(button, choice):
+    passwd_edit = urwid.Edit(("Password : "))
+    done = urwid.Button(u'Ok')
+    pile = urwid.Pile([passwd_edit, done])
+    urwid.connect_signal(passwd_edit, 'change', password_process, choice)
+    urwid.connect_signal(done, 'click', update_passwd_cache)
+    main.original_widget = urwid.Filler(pile)
+
+
+
+
+
+def exit_program(button):
+    raise urwid.ExitMainLoop()
+
+if __name__ == '__main__':
+    main = urwid.Padding(menu(u'Choose users', users, item_chosen), left=2, right=2)
+    top = urwid.Overlay(main, urwid.SolidFill(u'\N{MEDIUM SHADE}'),align='center', width=('relative', 60),valign='middle', height=('relative', 60),min_width=20, min_height=9)
+    urwid.MainLoop(top, palette=[('reversed', 'standout', '')]).run()
