@@ -1,16 +1,30 @@
 #! /usr/bin/python3
-import urwid, pwd, grp, crypt, getpass, spwd, logging, subprocess, shutil, distutils, os, sys
+import os
+user_c = ""
+if os.geteuid() != 0:
+    exit("[Error] Not root!")
+import urwid, pwd, grp, crypt, getpass, spwd, logging, subprocess, shutil, distutils, sys, configparser
 TTY = str(os.ttyname(sys.stdout.fileno())).split('/')[2].replace('tty','')
 DESKTOPS = os.listdir('/usr/share/xsessions')
 dlist = []
-
+l = ""
 def log(level,msg):
-    print("["+level+"] "+msg)
+    global l
+    l = l+"["+level+"] "+msg+"\n"
 
 for desktop in DESKTOPS:
     dname = str(desktop).replace('.desktop', '')
     log("Action","adding desktop "+dname+" to list.")
     dlist.insert(-1, dname)
+dlist.insert(-1, "xterm")
+
+class RestartProcess(Exception):
+    pass
+    def __init__(self,init):
+        self.init = init
+
+def back(init=None):
+    start()
 
 users = []
 for p in pwd.getpwall():
@@ -18,7 +32,7 @@ for p in pwd.getpwall():
         log("Action","adding user "+p[0]+" to list.")
         users.insert(-1, p[0])
 
-def check_pass(username):
+def check_pass(username,password):
    password = spwd.getspnam(username).sp_pwdp
    if password:
       clr_text = getpass.getpass()
@@ -28,40 +42,58 @@ def check_pass(username):
 
 def menu(title, choices, signal):
     body = [urwid.Text(title), urwid.Divider()]
-    for c in users:
+    for c in choices:
+        log("Action","adding "+c+" to the menu")
         button = urwid.Button(c)
         urwid.connect_signal(button, 'click', signal, c)
         body.append(urwid.AttrMap(button, None, focus_map='reversed'))
     return urwid.ListBox(urwid.SimpleFocusListWalker(body))
 
+passwd_c = ""
 def update_passwd_cache(widget, newtext):
-    global passwd_c
     passwd_c = newtext
 
+
+
 def wm_process(button, choice):
-    FILE = open('/usr/share/xsessions/' + DESKTOPS[SELECTEDINDEX], "rb")
-    for line in FILE:
+    try:
+        raise urwid.ExitMainLoop()
+    except:
+        pass
+    print("Press Control+C to back to login screen after X session finished")
+    EXEC = "xterm"
+    dfile = configparser.ConfigParser()
+    dfile.read('/usr/share/xsessions/' + choice + ".desktop")
+    if choice != "xterm":
         try:
-            if line.decode('utf8').startswith("Exec="):
-                EXEC = ' '.join(line.decode('utf8').split('=')[1:]).rstrip()
-        except:
-            # Ignore the line
-            continue
-        # Start the desktop session
-        os.system('sx ' + EXEC + " -- :1 vt" + TTY)
-        main.original_widget = urwid.Filler(menu(u'Choose users', users, item_chosen))
+            EXEC = dfile['Desktop Entry']['Exec']
+        except KeyError:
+            pass
+    else:
+        EXEC = choice
+    os.system('startx \"su ' + user_c + " -c " + EXEC + "\" -- :1 vt" + TTY + "")
+    start()
+
+
 
 def password_process(button, choice):
-    global passwd_c
-    if check_pass(choice):
-        menu(u"Choose Desktop Envioment", dlist, wm_process)
+    if check_pass(choice,passwd_c):
+        start(menu(u"Choose Desktop Envioment", dlist, wm_process))
+    else:
+        response = urwid.Text([u'Password Incorrect!\n'])
+        done = urwid.Button(u'Ok')
+        urwid.connect_signal(done, 'click', back)
+        main.original_widget = urwid.Filler(urwid.Pile([response,urwid.AttrMap(done, None, focus_map='reversed')]))
+
 
 def item_chosen(button, choice):
-    passwd_edit = urwid.Edit(("Password : "))
+    global user_c
+    user_c = choice
+    passwd_edit = urwid.Edit("Password for "+choice+": ",mask="*")
     done = urwid.Button(u'Ok')
     pile = urwid.Pile([passwd_edit, done])
-    urwid.connect_signal(passwd_edit, 'change', password_process, choice)
-    urwid.connect_signal(done, 'click', update_passwd_cache)
+    urwid.connect_signal(passwd_edit, 'change', update_passwd_cache)
+    urwid.connect_signal(done, 'click', password_process, choice)
     main.original_widget = urwid.Filler(pile)
 
 
@@ -71,7 +103,35 @@ def item_chosen(button, choice):
 def exit_program(button):
     raise urwid.ExitMainLoop()
 
-if __name__ == '__main__':
-    main = urwid.Padding(menu(u'Choose users', users, item_chosen), left=2, right=2)
+def start(init=menu(u'Choose users', users, item_chosen)):
+    try:
+        raise urwid.ExitMainLoop()
+    except:
+        pass
+    global main
+    main = None
+    main = urwid.Padding(init, left=2, right=2)
     top = urwid.Overlay(main, urwid.SolidFill(u'\N{MEDIUM SHADE}'),align='center', width=('relative', 60),valign='middle', height=('relative', 60),min_width=20, min_height=9)
-    urwid.MainLoop(top, palette=[('reversed', 'standout', '')]).run()
+    try:
+        urwid.MainLoop(top, palette=[('reversed', 'standout', '')]).run()
+    except KeyboardInterrupt:
+        try:
+            raise urwid.ExitMainLoop()
+        except:
+            pass
+        os.system("clear")
+        log("Action","Printing run log")
+        print(l)
+        exit()
+    except RestartProcess as e:
+        raise urwid.ExitMainLoop()
+        start(e.init)
+    except:
+        log("Action","Printing run log")
+        print(l)
+        raise
+    finally:
+        os.system("reset")
+
+if __name__ == '__main__':
+    start()
